@@ -2,9 +2,9 @@ apiVersion: helm.toolkit.fluxcd.io/v2beta1
 kind: HelmRelease
 metadata:
   name: keycloak
+  namespace: keycloak
 spec:
   chart:
     spec:
       version: "10.1.5"
-  test:
-    enable: true
+  values:
