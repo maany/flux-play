@@ -14,3 +14,4 @@
 bin/
 
 clusters/*/flux-system
+pat.txt
