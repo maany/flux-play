@@ -26,12 +26,4 @@ chmod +x $GITHUB_WORKSPACE/bin/kubeconform
 
 echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
 echo "$RUNNER_WORKSPACE/$(basename $GITHUB_REPOSITORY)/bin" >> $GITHUB_PATH
-Footer
-© 2022 GitHub, Inc.
-Footer navigation
-Terms
-Privacy
-Security
-Status
-Docs
 
