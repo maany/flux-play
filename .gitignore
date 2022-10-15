@@ -13,4 +13,4 @@
 
 bin/
 
-cluster/*/flux-system
+clusters/*/flux-system
