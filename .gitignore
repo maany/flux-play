@@ -15,3 +15,5 @@ bin/
 
 clusters/*/flux-system
 pat.txt
+config.yaml
+env.sh

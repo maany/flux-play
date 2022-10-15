@@ -7,6 +7,4 @@ spec:
   chart:
     spec:
       version: "10.1.5"
-  test:
-    enable: true
-  values:
+
