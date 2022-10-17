@@ -11,4 +11,9 @@ spec:
     extraEnvVars:
       - name: KEYCLOAK_LOG_LEVEL
         value: DEBUG
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 1024Mi
+
 
