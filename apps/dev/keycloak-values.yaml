@@ -15,5 +15,8 @@ spec:
       requests:
         cpu: 1000m
         memory: 1024Mi
-
+    
+    postgresql:
+      auth:
+        password: thiswillbereplacedwithsecret
 
