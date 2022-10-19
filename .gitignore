@@ -17,3 +17,8 @@ clusters/*/flux-system
 pat.txt
 config.yaml
 env.sh
+age.agekey
+age.pubkey
+scripts/venv
+.vscode
+.kube
