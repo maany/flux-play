@@ -10,7 +10,7 @@ import pathlib
 from enum import Enum
 from contextlib import contextmanager
 
-from kubernetes import client, config, watch
+from kubernetes import client
 from kubernetes.client import Configuration, ApiClient
 from pyrage import x25519
 from termcolor import colored
@@ -70,6 +70,7 @@ class ClusterConfiguration:
         self.steps = [
             self.create_flux_system_namespace,
             self.setup_age_secret,
+            self.setup_github_secret,
             # self.generate_flux_config,
             # self.install_flux
         ]
@@ -127,6 +128,45 @@ class ClusterConfiguration:
             self.log(log_prefix, f"Writing age public key to", colored(AGE_PUBLIC_KEY_FILE, "green", attrs=["bold"]))
             f.write(self.age_pubkey)
 
+    def setup_github_secret(self, log_prefix: str | None = None, **kwargs):
+        # get the current secrets
+        current_secrets = self.v1.list_namespaced_secret(namespace="flux-system")
+        # check if the secret already exists
+        if "github-flux-auth" in [secret.metadata.name for secret in current_secrets.items]:
+            if not kwargs.get("force_github_secret", False):
+                self.log(log_prefix, colored("Github secret already exists, skipping", "blue"))
+                return
+            self.log(
+                log_prefix,
+                colored("Github secret already exists, but force_github_secret is set to True, recreating", "yellow"),
+            )
+            self.log(log_prefix, colored("Deleting existing github secret", "red"))
+            self.v1.delete_namespaced_secret(name="github-flux-auth", namespace="flux-system")
+        # create the secret
+        gh_user = kwargs.get("gh_user")
+        if not gh_user:
+            self.log(log_prefix, colored("No github user provided", "red", attrs=["bold", "blink"]))
+            raise ValueError("No github user provided. Please provide a github user using the --gh-user flag")
+        gh_password = kwargs.get("gh_password")
+        if not gh_password:
+            self.log(log_prefix, colored("No github password provided", "red", attrs=["bold", "blink"]))
+            raise ValueError("No github password provided. Please provide a github password using the --gh-password flag")
+
+        secret = {
+            "kind": "Secret",
+            "apiVersion": "v1",
+            "metadata": {
+                "name": "github-flux-auth",
+                "namespace": "flux-system",
+            },
+            "data": {
+                "username": base64.b64encode(gh_user.encode()).decode(),
+                "password": base64.b64encode(gh_password.encode()).decode(),
+            }
+        }
+        self.log(log_prefix, "Creating secret", json.dumps(secret, indent=4))
+        self.v1.create_namespaced_secret(namespace="flux-system", body=secret)
+
     def generate_flux_config(self, log_prefix: str | None = None, **kwargs):
         pass
 
@@ -143,14 +183,16 @@ if __name__ == "__main__":
         help="Force the creation of the age secret",
     )
     parser.add_argument(
-        "--gh_user", type=str, help="Github user with acccess to this repo"
+        "--gh-user", type=str, help="Github user with acccess to this repo"
     )
     parser.add_argument(
-        "--gh_password",
+        "--gh-password",
         type=str,
         help="Github password for the user with acccess to this repo",
     )
-
+    parser.add_argument(
+        '--force-github-secret', action='store_true', help='Force the creation of the github secret'
+    )
     args = parser.parse_args()
     print(args)
     with run(
@@ -178,6 +220,7 @@ if __name__ == "__main__":
             force_age_secret=args.force_age_secret,
             gh_user=args.gh_user,
             gh_password=args.gh_password,
+            force_github_secret=args.force_github_secret,
         )
         cluster_config.run()
 
