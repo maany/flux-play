@@ -24,3 +24,6 @@ scripts/venv
 .kube
 .vagrant
 config
+
+clusters/dev/source.yaml
+clusters/dev/flux.yaml

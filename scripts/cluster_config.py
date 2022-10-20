@@ -7,10 +7,9 @@ import os
 import json
 import base64
 import pathlib
-from enum import Enum
 from contextlib import contextmanager
 
-from kubernetes import client
+from kubernetes import client, utils
 from kubernetes.client import Configuration, ApiClient
 from pyrage import x25519
 from termcolor import colored
@@ -18,18 +17,6 @@ from termcolor import colored
 
 AGE_PUBLIC_KEY_FILE = (pathlib.Path(
     __file__).parent.parent / "age.pubkey").resolve()
-
-
-class ClusterType(Enum):
-    """_summary_ The cluster type
-
-    Args:
-        Enum (_type_): _description_
-    """
-
-    DEV = "dev"
-    PROD = "production"
-    STAGING = "staging"
 
 
 @contextmanager
@@ -76,6 +63,16 @@ class BaseConfiguration:
     def log(self, log_prefix: str, *message):
         print(log_prefix, *message)
 
+    def log_k8s_api_error(self, log_prefix: str, err: utils.FailToCreateError):
+        self.log(log_prefix,colored("Failed to create following resources:", "red", attrs=["bold"]))
+        for err in err.api_exceptions:
+            error = json.loads(err.body)
+            reason = error["reason"]
+            message = error["message"]
+            print(colored(f"{log_prefix} {reason}: {message}", "yellow" if reason == "AlreadyExists" else "red" , attrs=["bold"]))
+            if reason != "AlreadyExists":
+                print(colored(f"{log_prefix} {err}", "red", attrs=["bold"]))
+    
     def run(self):
         total_steps = len(self.steps)
         print(colored(f"Running {self.__class__.__name__} with {total_steps} steps",
@@ -88,7 +85,7 @@ class BaseConfiguration:
 
     def run_process(self, *cmd, log_prefix: str, handle_error=True):
         completed_process = None
-        print(colored(f"{log_prefix} Running {' '.join(cmd[0])}", "yellow", attrs=["bold"]))
+        print(colored(f"{log_prefix} {' '.join(cmd[0])}", "yellow"))
         try:
             completed_process = subprocess.run(
                 *cmd, env=os.environ.copy(), capture_output=True)
@@ -98,17 +95,13 @@ class BaseConfiguration:
             sys.exit(1)
         return_code, out, err = completed_process.returncode, completed_process.stdout, completed_process.stderr
         out, err = out.decode(), err.decode()
-        if handle_error and return_code != 0:
-            print(colored(log_prefix, "Error running command: {}".format(
-                completed_process), "red", attrs=["bold"]))
-            print(log_prefix, out)
-            print(log_prefix, colored(err, "red"))
-            print(log_prefix,return_code)
-            print(colored(log_prefix, "Exiting", "red", attrs=["bold"]))
-            sys.exit(1)
-        print(colored(f"{log_prefix} Command completed successfully", "green"))
+        print(colored(
+            f"{log_prefix} Command completed with exit code {return_code}", "blue", attrs=["bold"]))
         print(f"{log_prefix} ", out)
-        print(colored(f"{log_prefix} {err}", "green"))
+        print(colored(f"{log_prefix} {err}",
+              "green" if return_code == 0 else "red"))
+        if handle_error and return_code != 0:
+            sys.exit(1)
         return return_code, out, err
 
 
@@ -225,31 +218,110 @@ class ClusterConfiguration(BaseConfiguration):
 class FluxConfiguration(BaseConfiguration):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.cluster_name = kwargs.get("cluster_name")
         self.kubeconfig = kwargs.get("kube_config")
+        self.cluster_name = kwargs.get("cluster_name")
+        self.gh_repo = kwargs.get("gh_repo")
+        self.cluster_path = pathlib.Path(
+            __file__).parent.parent / "clusters" / self.cluster_name
+        self.infra_path = self.cluster_path / "infrastructure.yaml"
+        self.apps_path = self.cluster_path / "apps.yaml"
+        self.source_path = self.cluster_path / "source.yaml"
+        self.flux_path = self.cluster_path / "flux.yaml"
+        
+        self.steps = [
+            self.check_config,
+            self.flux_preflight_check,
+            self.generate_flux_source,
+            self.install_flux,
+            self.install_apps,
+        ]
+
+    def check_config(self, log_prefix: str | None = None, **kwargs):
+
         if self.kubeconfig is None:
             self.log(self.__class__.__name__, colored(
                 "No kubeconfig provided", "red", attrs=["bold", "blink"]))
             raise ValueError(
                 "No kubeconfig provided. Please provide a kubeconfig using the --kube-config flag")
         self.env = {"KUBECONFIG": self.kubeconfig, "PATH": os.environ["PATH"]}
-        self.steps = [
-            self.flux_preflight_check,
-            self.generate_flux_config,
-            self.install_flux
-        ]
+
+        if self.gh_repo is None:
+            self.log(log_prefix, colored(
+                "No github repo provided", "red", attrs=["bold", "blink"]))
+            raise ValueError(
+                "No github repo provided. Please provide a github repo using the --gh-repo flag")
+
+        if self.cluster_name is None:
+            self.log(log_prefix, colored(
+                "No cluster name provided", "red", attrs=["bold", "blink"]))
+            raise ValueError(
+                "No cluster name provided. Please provide a cluster name using the --cluster-name flag")
+
+        if not self.cluster_path.exists():
+            self.log(log_prefix, colored(
+                f"Cluster path {self.cluster_path} does not exist", "red", attrs=["bold", "blink"]))
+            raise ValueError(
+                f"Please ensure you have created a directory for cluster {self.cluster_name} as described in the README and provide a valid cluster name using the --cluster-name flag")
+
+        if not self.infra_path.exists():
+            self.log(log_prefix, colored(
+                f"Infrastructure file {self.infra_path} does not exist", "red", attrs=["bold", "blink"]))
+            raise ValueError(
+                f"Please ensure you have created an {self.infra_path} file for cluster {self.cluster_name} as described in the README")
+
+        if not self.apps_path.exists():
+            self.log(log_prefix, colored(
+                f"Applications file {self.apps_path} does not exist", "red", attrs=["bold", "blink"]))
+            raise ValueError(
+                f"Please ensure you have created an {self.apps_path} file for cluster {self.cluster_name} as described in the README")
 
     def flux_preflight_check(self, log_prefix: str | None = None, **kwargs):
         self.run_process(["flux", "check", "--pre"], log_prefix=log_prefix)
-        
 
-    def generate_flux_config(self, log_prefix: str | None = None, **kwargs):
-        pass
+    def generate_flux_source(self, log_prefix: str | None = None, **kwargs):
+        code, out, err = self.run_process([
+            "flux", "create", "source", "git", "flux-system",
+            "--url", self.gh_repo,
+            "--branch", "main",
+            "--secret-ref", "github-flux-auth",
+            "--interval", "1m",
+            "--export"
+        ], log_prefix=log_prefix)
+
+        self.log(log_prefix, colored(
+            f"Writting flux source to {self.source_path}", "yellow", attrs=["bold"]))
+        with open(str(self.source_path), "w") as f:
+            f.write(out)
 
     def install_flux(self, log_prefix: str | None = None, **kwargs):
-        # if not self.cluster_name:
-        # raise ValueError("No cluster name provided. Please provide a cluster name using the --cluster-name flag")
-        pass
+        code, out, err = self.run_process(["flux", "install", "--export",
+                         f"{self.flux_path}"], log_prefix=log_prefix)
+        self.log(log_prefix,f"Writing Flux CRDs to {self.flux_path}")
+        with open(str(self.flux_path), "w") as f:
+            f.write(out)
+        self.log(log_prefix,colored(
+            f"Flux installed, please check {self.flux_path} for any errors", "green", attrs=["bold"]))
+        self.log(log_prefix,colored(
+            f"Executing `kubectl apply -f {self.flux_path} to install flux", "green", attrs=["bold"]))
+        try:
+            utils.create_from_yaml(self.api_client, str(
+                self.flux_path), namespace="flux-system")
+        except utils.FailToCreateError as e:
+            self.log_k8s_api_error(log_prefix, e)
+
+
+    def install_apps(self, log_prefix: str | None = None, **kwargs):
+        self.log(log_prefix,colored(
+            f"Setting up GitReposority/flux-system from {self.source_path}", "green", attrs=["bold"]))
+        self.run_process(["kubectl", "apply", "-f", str(self.source_path)], log_prefix=log_prefix)
+               
+        self.log(log_prefix,colored(
+            f"Setting up Infrastructure from {self.infra_path}", "green", attrs=["bold"]))
+        self.run_process(["kubectl", "apply", "-f", str(self.infra_path)], log_prefix=log_prefix)
+
+        self.log(log_prefix,
+            colored(f"Setting up Apps from {self.apps_path}", "green", attrs=["bold"]))
+        self.run_process(["kubectl", "apply", "-f", str(self.apps_path)], log_prefix=log_prefix)
 
 
 if __name__ == "__main__":
@@ -273,7 +345,10 @@ if __name__ == "__main__":
         '--force-github-secret', action='store_true', help='Force the creation of the github secret'
     )
     parser.add_argument(
-        '--cluster-name', type=ClusterType, help='Name of the cluster'
+        '--cluster-name', type=str, help='Name of the cluster. {dev, staging, production}'
+    )
+    parser.add_argument(
+        '--gh-repo', type=str, default="https://github.com/maany/flux-play", help='URL of the github repo containing flux values'
     )
     args = parser.parse_args()
     print(args)
@@ -312,6 +387,7 @@ if __name__ == "__main__":
             gh_password=args.gh_password,
             force_github_secret=args.force_github_secret,
             kube_config=args.kube_config,
+            gh_repo=args.gh_repo,
+            cluster_name=args.cluster_name
         )
         flux_config.run()
-        # proc.wait()
