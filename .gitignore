@@ -22,3 +22,4 @@ age.pubkey
 scripts/venv
 .vscode
 .kube
+.vagrant
