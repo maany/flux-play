@@ -391,3 +391,6 @@ if __name__ == "__main__":
             cluster_name=args.cluster_name
         )
         flux_config.run()
+        
+        proc.terminate()
+        proc.kill()
