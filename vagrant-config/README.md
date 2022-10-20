@@ -22,7 +22,12 @@ maany@beast:~/Projects/pqer/flux-play/vagrant-config$ cat /etc/vbox/networks.con
 * 2001::/64
 ```
 
-After the nodes are up, copy the kubeconfig
+After the nodes are up, copy the kubeconfig with pswd `kubeadmin`
 ```
-scp root@172.16.16.100:/etc/kubernetes/admin.conf ./config
+scp root@172.16.16.100:/etc/kubernetes/admin.conf ~/.kube/config
+```
+
+Remove offending keys via
+```
+ssh-keygen -f ~/.ssh/known_hosts -R "172.16.16.100"
 ```

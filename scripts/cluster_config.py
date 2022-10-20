@@ -58,8 +58,7 @@ def run(
     if return_stdout:
         return proc.stdout
 
-
-class ClusterConfiguration:
+class BaseConfiguration:
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs
         kubeconfig = Configuration()
@@ -67,23 +66,30 @@ class ClusterConfiguration:
         self.api_client = ApiClient(configuration=kubeconfig)
         self.v1 = client.CoreV1Api(api_client=api_client)
 
-        self.steps = [
-            self.create_flux_system_namespace,
-            self.setup_age_secret,
-            self.setup_github_secret,
-            # self.generate_flux_config,
-            # self.install_flux
-        ]
+        self.steps = []
+
+    def log(self, log_prefix: str, *message):
+        print(log_prefix, *message)
 
     def run(self):
         total_steps = len(self.steps)
+        print(colored(f"Running {self.__class__.__name__} with {total_steps} steps", "green", "on_yellow", attrs=["bold"]))
         for idx, step in enumerate(self.steps):
             log_prefix = "[{}/{}]: {} : ".format(idx + 1, total_steps, step.__name__)
             print(colored(log_prefix + "Starting", "magenta", attrs=["bold"]))
             step(log_prefix, **self.kwargs)
 
-    def log(self, log_prefix: str, *message):
-        print(log_prefix, *message)
+
+class ClusterConfiguration(BaseConfiguration):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+
+        self.steps = [
+            self.create_flux_system_namespace,
+            self.setup_age_secret,
+            self.setup_github_secret,
+            
+        ]
 
     def create_flux_system_namespace(self, log_prefix: str | None = None, **kwargs):
         all_namespaces = self.v1.list_namespace()
@@ -167,12 +173,26 @@ class ClusterConfiguration:
         self.log(log_prefix, "Creating secret", json.dumps(secret, indent=4))
         self.v1.create_namespaced_secret(namespace="flux-system", body=secret)
 
+class FluxConfiguration(BaseConfiguration):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.cluster_name = kwargs.get("cluster_name")
+        if not self.cluster_name:
+            raise ValueError("No cluster name provided. Please provide a cluster name using the --cluster-name flag")
+        
+        self.steps = [
+            self.flux_preflight_check,
+            self.generate_flux_config,
+            self.install_flux
+        ]
+    def flux_preflight_check(self, log_prefix: str | None = None, **kwargs):
+        run("flux check --pre", log_prefix=log_prefix)
+    
     def generate_flux_config(self, log_prefix: str | None = None, **kwargs):
         pass
 
     def install_flux(self, log_prefix: str | None = None, **kwargs):
         pass
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cluster configuration")
@@ -192,6 +212,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--force-github-secret', action='store_true', help='Force the creation of the github secret'
+    )
+    parser.add_argument(
+        '--cluster-name', type=ClusterType, help='Name of the cluster'
     )
     args = parser.parse_args()
     print(args)
@@ -224,4 +247,11 @@ if __name__ == "__main__":
         )
         cluster_config.run()
 
+        flux_config = FluxConfiguration(
+            force_age_secret=args.force_age_secret,
+            gh_user=args.gh_user,
+            gh_password=args.gh_password,
+            force_github_secret=args.force_github_secret,
+        )
+        flux_config.run()
         # proc.wait()
