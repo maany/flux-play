@@ -207,8 +207,8 @@ class ClusterConfiguration(BaseConfiguration):
                 "namespace": "flux-system",
             },
             "data": {
-                "username": base64.b64encode(gh_user.encode()).decode(),
-                "password": base64.b64encode(gh_password.encode()).decode(),
+                "username": base64.b64encode(f"{gh_user}\n".encode()).decode(),
+                "password": base64.b64encode(f"{gh_password}\n".encode()).decode(),
             }
         }
         self.log(log_prefix, "Creating secret", json.dumps(secret, indent=4))
