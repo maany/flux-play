@@ -27,3 +27,5 @@ config
 
 clusters/dev/source.yaml
 clusters/dev/flux.yaml
+
+vagrant-config/configs

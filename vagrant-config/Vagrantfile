@@ -1,76 +1,42 @@
-# -*- mode: ruby -*-
-# vi: set ft=ruby :
+NUM_WORKER_NODES=2
+IP_NW="10.0.0."
+IP_START=10
 
-ENV['VAGRANT_NO_PARALLEL'] = 'yes'
+Vagrant.configure("2") do |config|
+  config.vm.provision "shell", env: {"IP_NW" => IP_NW, "IP_START" => IP_START}, inline: <<-SHELL
+      apt-get update -y
+      echo "$IP_NW$((IP_START)) master-node" >> /etc/hosts
+      echo "$IP_NW$((IP_START+1)) worker-node01" >> /etc/hosts
+      echo "$IP_NW$((IP_START+2)) worker-node02" >> /etc/hosts
+  SHELL
 
-VAGRANT_BOX         = "generic/ubuntu2204"
-VAGRANT_BOX_VERSION = "4.0.2"
-CPUS_MASTER_NODE    = 2
-CPUS_WORKER_NODE    = 1
-MEMORY_MASTER_NODE  = 2048
-MEMORY_WORKER_NODE  = 1024
-WORKER_NODES_COUNT  = 2
+  config.vm.box = "bento/ubuntu-22.04"
+  config.vm.box_check_update = true
 
-
-Vagrant.configure(2) do |config|
-
-  config.vm.provision "shell", path: "bootstrap.sh"
-
-  # Kubernetes Master Server
-  config.vm.define "kmaster" do |node|
-  
-    node.vm.box               = VAGRANT_BOX
-    node.vm.box_check_update  = false
-    node.vm.box_version       = VAGRANT_BOX_VERSION
-    node.vm.hostname          = "kmaster.example.com"
-
-    node.vm.network "private_network", ip: "172.16.16.100"
-  
-    node.vm.provider :virtualbox do |v|
-      v.name    = "kmaster"
-      v.memory  = MEMORY_MASTER_NODE
-      v.cpus    = CPUS_MASTER_NODE
+  config.vm.define "master" do |master|
+    # master.vm.box = "bento/ubuntu-18.04"
+    master.vm.hostname = "master-node"
+    master.vm.network "private_network", ip: IP_NW + "#{IP_START}"
+    master.vm.provider "virtualbox" do |vb|
+        vb.memory = 4096
+        vb.cpus = 2
     end
-  
-    node.vm.provider :libvirt do |v|
-      v.memory  = MEMORY_MASTER_NODE
-      v.nested  = true
-      v.cpus    = CPUS_MASTER_NODE
-    end
-  
-    node.vm.provision "shell", path: "bootstrap_kmaster.sh"
-  
+    master.vm.provision "shell", path: "scripts/common.sh"
+    master.vm.provision "shell", path: "scripts/master.sh"
   end
 
+  (1..NUM_WORKER_NODES).each do |i|
 
-  # Kubernetes Worker Nodes
-  (1..WORKER_NODES_COUNT).each do |i|
-
-    config.vm.define "kworker#{i}" do |node|
-
-      node.vm.box               = VAGRANT_BOX
-      node.vm.box_check_update  = false
-      node.vm.box_version       = VAGRANT_BOX_VERSION
-      node.vm.hostname          = "kworker#{i}.example.com"
-
-      node.vm.network "private_network", ip: "172.16.16.10#{i}"
-
-      node.vm.provider :virtualbox do |v|
-        v.name    = "kworker#{i}"
-        v.memory  = MEMORY_WORKER_NODE
-        v.cpus    = CPUS_WORKER_NODE
-      end
-
-      node.vm.provider :libvirt do |v|
-        v.memory  = MEMORY_WORKER_NODE
-        v.nested  = true
-        v.cpus    = CPUS_WORKER_NODE
-      end
-
-      node.vm.provision "shell", path: "bootstrap_kworker.sh"
-
+  config.vm.define "node0#{i}" do |node|
+    node.vm.hostname = "worker-node0#{i}"
+    node.vm.network "private_network", ip: IP_NW + "#{IP_START + i}"
+    node.vm.provider "virtualbox" do |vb|
+        vb.memory = 4096
+        vb.cpus = 1
     end
-
+    node.vm.provision "shell", path: "scripts/common.sh"
+    node.vm.provision "shell", path: "scripts/node.sh"
   end
 
-end
+  end
+end 
