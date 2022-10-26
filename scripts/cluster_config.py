@@ -7,6 +7,8 @@ import os
 import json
 import base64
 import pathlib
+import requests
+import time
 from contextlib import contextmanager
 
 from kubernetes import client, utils
@@ -56,7 +58,7 @@ class BaseConfiguration:
         kubeconfig = Configuration()
         kubeconfig.host = "http://127.0.0.1:8080"
         self.api_client = ApiClient(configuration=kubeconfig)
-        self.v1 = client.CoreV1Api(api_client=api_client)
+        self.v1 = client.CoreV1Api(api_client=self.api_client)
 
         self.steps = []
 
@@ -64,15 +66,17 @@ class BaseConfiguration:
         print(log_prefix, *message)
 
     def log_k8s_api_error(self, log_prefix: str, err: utils.FailToCreateError):
-        self.log(log_prefix,colored("Failed to create following resources:", "red", attrs=["bold"]))
+        self.log(log_prefix, colored(
+            "Failed to create following resources:", "red", attrs=["bold"]))
         for err in err.api_exceptions:
             error = json.loads(err.body)
             reason = error["reason"]
             message = error["message"]
-            print(colored(f"{log_prefix} {reason}: {message}", "yellow" if reason == "AlreadyExists" else "red" , attrs=["bold"]))
+            print(colored(f"{log_prefix} {reason}: {message}",
+                  "yellow" if reason == "AlreadyExists" else "red", attrs=["bold"]))
             if reason != "AlreadyExists":
                 print(colored(f"{log_prefix} {err}", "red", attrs=["bold"]))
-    
+
     def run(self):
         total_steps = len(self.steps)
         print(colored(f"Running {self.__class__.__name__} with {total_steps} steps",
@@ -103,6 +107,10 @@ class BaseConfiguration:
         if handle_error and return_code != 0:
             sys.exit(1)
         return return_code, out, err
+
+    def is_gh_repo_private(self, gh_user, gh_repo: str) -> bool:
+        r = requests.get(f"https://api.github.com/repos/{gh_user}/{gh_repo}")
+        return r.status_code == 404
 
 
 class ClusterConfiguration(BaseConfiguration):
@@ -221,15 +229,17 @@ class FluxConfiguration(BaseConfiguration):
         self.kubeconfig = kwargs.get("kube_config")
         self.cluster_name = kwargs.get("cluster_name")
         self.gh_repo = kwargs.get("gh_repo")
+        self.gh_user = kwargs.get("gh_user")
         self.cluster_path = pathlib.Path(
             __file__).parent.parent / "clusters" / self.cluster_name
         self.infra_path = self.cluster_path / "infrastructure.yaml"
         self.apps_path = self.cluster_path / "apps.yaml"
         self.source_path = self.cluster_path / "source.yaml"
         self.flux_path = self.cluster_path / "flux.yaml"
-        
+
         self.steps = [
             self.check_config,
+            self.restart_coredns_pods,
             self.flux_preflight_check,
             self.generate_flux_source,
             self.install_flux,
@@ -250,6 +260,12 @@ class FluxConfiguration(BaseConfiguration):
                 "No github repo provided", "red", attrs=["bold", "blink"]))
             raise ValueError(
                 "No github repo provided. Please provide a github repo using the --gh-repo flag")
+
+        if self.gh_user is None:
+            self.log(log_prefix, colored(
+                "No github user provided", "red", attrs=["bold", "blink"]))
+            raise ValueError(
+                "No github user provided. Please provide a github user using the --gh-user flag")
 
         if self.cluster_name is None:
             self.log(log_prefix, colored(
@@ -275,18 +291,38 @@ class FluxConfiguration(BaseConfiguration):
             raise ValueError(
                 f"Please ensure you have created an {self.apps_path} file for cluster {self.cluster_name} as described in the README")
 
+    def restart_coredns_pods(self, log_prefix: str | None = None, **kwargs):
+        self.log(log_prefix, colored("Restarting coredns pods", "green"))
+        self.run_process([
+            "kubectl", "rollout", "restart", "deployment/coredns", "-n", "kube-system"
+        ], log_prefix=log_prefix)
+        self.log(log_prefix, colored("Sleeping for 10s", "yellow"))
+        time.sleep(10)
     def flux_preflight_check(self, log_prefix: str | None = None, **kwargs):
         self.run_process(["flux", "check", "--pre"], log_prefix=log_prefix)
 
     def generate_flux_source(self, log_prefix: str | None = None, **kwargs):
-        code, out, err = self.run_process([
+        cmd = [
             "flux", "create", "source", "git", "flux-system",
             "--url", self.gh_repo,
             "--branch", "main",
-            "--secret-ref", "github-flux-auth",
             "--interval", "1m",
             "--export"
-        ], log_prefix=log_prefix)
+        ]
+        repo_name = self.gh_repo.split("/")[-1]
+        if self.is_gh_repo_private(self.gh_user, repo_name):
+            self.log(log_prefix, colored(
+                "Github repo is private. Will use github-flux-auth secret", "yellow"))
+            cmd.extend(
+                [
+                    "--secret-ref", "github-flux-auth",
+                ]
+            )
+        else:
+            self.log(log_prefix, colored(
+                "Github repo is public. Will not use github-flux-auth secret or username/password", "yellow"))
+
+        code, out, err = self.run_process(cmd, log_prefix=log_prefix)
 
         self.log(log_prefix, colored(
             f"Writting flux source to {self.source_path}", "yellow", attrs=["bold"]))
@@ -295,13 +331,13 @@ class FluxConfiguration(BaseConfiguration):
 
     def install_flux(self, log_prefix: str | None = None, **kwargs):
         code, out, err = self.run_process(["flux", "install", "--export",
-                         f"{self.flux_path}"], log_prefix=log_prefix)
-        self.log(log_prefix,f"Writing Flux CRDs to {self.flux_path}")
+                                           f"{self.flux_path}"], log_prefix=log_prefix)
+        self.log(log_prefix, f"Writing Flux CRDs to {self.flux_path}")
         with open(str(self.flux_path), "w") as f:
             f.write(out)
-        self.log(log_prefix,colored(
+        self.log(log_prefix, colored(
             f"Flux installed, please check {self.flux_path} for any errors", "green", attrs=["bold"]))
-        self.log(log_prefix,colored(
+        self.log(log_prefix, colored(
             f"Executing `kubectl apply -f {self.flux_path} to install flux", "green", attrs=["bold"]))
         try:
             utils.create_from_yaml(self.api_client, str(
@@ -309,19 +345,21 @@ class FluxConfiguration(BaseConfiguration):
         except utils.FailToCreateError as e:
             self.log_k8s_api_error(log_prefix, e)
 
-
     def install_apps(self, log_prefix: str | None = None, **kwargs):
-        self.log(log_prefix,colored(
+        self.log(log_prefix, colored(
             f"Setting up GitReposority/flux-system from {self.source_path}", "green", attrs=["bold"]))
-        self.run_process(["kubectl", "apply", "-f", str(self.source_path)], log_prefix=log_prefix)
-               
-        self.log(log_prefix,colored(
+        self.run_process(
+            ["kubectl", "apply", "-f", str(self.source_path)], log_prefix=log_prefix)
+
+        self.log(log_prefix, colored(
             f"Setting up Infrastructure from {self.infra_path}", "green", attrs=["bold"]))
-        self.run_process(["kubectl", "apply", "-f", str(self.infra_path)], log_prefix=log_prefix)
+        self.run_process(
+            ["kubectl", "apply", "-f", str(self.infra_path)], log_prefix=log_prefix)
 
         self.log(log_prefix,
-            colored(f"Setting up Apps from {self.apps_path}", "green", attrs=["bold"]))
-        self.run_process(["kubectl", "apply", "-f", str(self.apps_path)], log_prefix=log_prefix)
+                 colored(f"Setting up Apps from {self.apps_path}", "green", attrs=["bold"]))
+        self.run_process(
+            ["kubectl", "apply", "-f", str(self.apps_path)], log_prefix=log_prefix)
 
 
 if __name__ == "__main__":
@@ -391,6 +429,6 @@ if __name__ == "__main__":
             cluster_name=args.cluster_name
         )
         flux_config.run()
-        
+
         proc.terminate()
         proc.kill()
