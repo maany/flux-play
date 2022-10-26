@@ -18,5 +18,5 @@ spec:
     
     postgresql:
       auth:
-        password: thiswillbereplacedwithsecret
+        password: ihavetostilldebugthis
 
