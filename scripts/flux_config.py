@@ -3,7 +3,6 @@ import os
 import json
 import base64
 import pathlib
-import time
 
 from kubernetes import client, utils
 from kubernetes.client import Configuration, ApiClient
