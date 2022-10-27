@@ -1,8 +1,4 @@
 import argparse
-import typing
-import subprocess
-import sys
-import io
 import os
 import json
 import base64
@@ -147,8 +143,6 @@ class FluxConfiguration(BaseConfiguration):
 
         self.steps = [
             self.check_config,
-            self.restart_coredns_pods,
-            self.restart_metrics_server,
             self.flux_preflight_check,
             self.generate_flux_source,
             self.install_flux,
@@ -199,22 +193,6 @@ class FluxConfiguration(BaseConfiguration):
                 f"Applications file {self.apps_path} does not exist", "red", attrs=["bold", "blink"]))
             raise ValueError(
                 f"Please ensure you have created an {self.apps_path} file for cluster {self.cluster_name} as described in the README")
-
-    def restart_coredns_pods(self, log_prefix: str | None = None, **kwargs):
-        self.log(log_prefix, colored("Restarting coredns pods", "green"))
-        self.run_process([
-            "kubectl", "rollout", "restart", "deployment/coredns", "-n", "kube-system"
-        ], log_prefix=log_prefix)
-        self.log(log_prefix, colored("Sleeping for 10s", "yellow"))
-        time.sleep(10)
-
-    def restart_metrics_server(self, log_prefix: str | None = None, **kwargs):
-        self.log(log_prefix, colored("Restarting metrics server", "green"))
-        self.run_process([
-            "kubectl", "rollout", "restart", "deployment/metrics-server", "-n", "kube-system"
-        ], log_prefix=log_prefix)
-        self.log(log_prefix, colored("Sleeping for 10s", "yellow"))
-        time.sleep(10)
 
     def flux_preflight_check(self, log_prefix: str | None = None, **kwargs):
         self.run_process(["flux", "check", "--pre"], log_prefix=log_prefix)
@@ -307,7 +285,6 @@ if __name__ == "__main__":
         '--gh-repo', type=str, default="https://github.com/maany/flux-play", help='URL of the github repo containing flux values'
     )
     args = parser.parse_args()
-    print(args)
     with run(
         "kubectl",
         "proxy",
