@@ -47,7 +47,7 @@ kubectl apply -f calico.yaml
 # kubectl apply -f https://raw.githubusercontent.com/scriptcamp/kubeadm-scripts/main/manifests/metrics-server.yaml
 
 # Using metrics server with --kubelet-insecure-tls flag instead of the one above
-kubectl apply -f https://raw.githubusercontent.com/maany/flux-play/main/vagrant-config/metrics/components.yaml
+kubectl apply -f /vagrant/metrics/components.yaml
 
 # Install Kubernetes Dashboard
 

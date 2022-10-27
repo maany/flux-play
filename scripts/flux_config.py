@@ -7,110 +7,18 @@ import os
 import json
 import base64
 import pathlib
-import requests
 import time
-from contextlib import contextmanager
 
 from kubernetes import client, utils
 from kubernetes.client import Configuration, ApiClient
 from pyrage import x25519
 from termcolor import colored
 
+from core.base_configuration import BaseConfiguration
+from core.run_context import run
 
 AGE_PUBLIC_KEY_FILE = (pathlib.Path(
     __file__).parent.parent / "age.pubkey").resolve()
-
-
-@contextmanager
-def run(
-    *args, check=False, return_stdout=False, env=None
-) -> typing.Union[typing.NoReturn, io.TextIOBase]:
-    kwargs = {"stdout": sys.stderr, "stderr": subprocess.STDOUT}
-    if env is not None:
-        kwargs["env"] = env
-    if return_stdout:
-        kwargs["stderr"] = sys.stderr
-        kwargs["stdout"] = subprocess.PIPE
-    args = [str(a) for a in args]
-    print(
-        "** Running",
-        " ".join(map(lambda a: repr(a) if " " in a else a, args)),
-        kwargs,
-        file=sys.stderr,
-        flush=True,
-    )
-    proc = None
-    try:
-        proc = subprocess.Popen(args, **kwargs)
-        yield proc
-    finally:
-        if proc is not None:
-            proc.terminate()
-            proc.kill()
-
-    if return_stdout:
-        return proc.stdout
-
-
-class BaseConfiguration:
-    def __init__(self, **kwargs) -> None:
-        self.kwargs = kwargs
-        kubeconfig = Configuration()
-        kubeconfig.host = "http://127.0.0.1:8080"
-        self.api_client = ApiClient(configuration=kubeconfig)
-        self.v1 = client.CoreV1Api(api_client=self.api_client)
-
-        self.steps = []
-
-    def log(self, log_prefix: str, *message):
-        print(log_prefix, *message)
-
-    def log_k8s_api_error(self, log_prefix: str, err: utils.FailToCreateError):
-        self.log(log_prefix, colored(
-            "Failed to create following resources:", "red", attrs=["bold"]))
-        for err in err.api_exceptions:
-            error = json.loads(err.body)
-            reason = error["reason"]
-            message = error["message"]
-            print(colored(f"{log_prefix} {reason}: {message}",
-                  "yellow" if reason == "AlreadyExists" else "red", attrs=["bold"]))
-            if reason != "AlreadyExists":
-                print(colored(f"{log_prefix} {err}", "red", attrs=["bold"]))
-
-    def run(self):
-        total_steps = len(self.steps)
-        print(colored(f"Running {self.__class__.__name__} with {total_steps} steps",
-              "green", "on_yellow", attrs=["bold"]))
-        for idx, step in enumerate(self.steps):
-            log_prefix = "[{}/{}]: {} : ".format(idx + 1,
-                                                 total_steps, step.__name__)
-            print(colored(log_prefix + "Starting", "magenta", attrs=["bold"]))
-            step(log_prefix, **self.kwargs)
-
-    def run_process(self, *cmd, log_prefix: str, handle_error=True):
-        completed_process = None
-        print(colored(f"{log_prefix} {' '.join(cmd[0])}", "yellow"))
-        try:
-            completed_process = subprocess.run(
-                *cmd, env=os.environ.copy(), capture_output=True)
-        except subprocess.CalledProcessError as e:
-            print(colored(log_prefix, "Error running command: {}".format(
-                e), "red", attrs=["bold"]))
-            sys.exit(1)
-        return_code, out, err = completed_process.returncode, completed_process.stdout, completed_process.stderr
-        out, err = out.decode(), err.decode()
-        print(colored(
-            f"{log_prefix} Command completed with exit code {return_code}", "blue", attrs=["bold"]))
-        print(f"{log_prefix} ", out)
-        print(colored(f"{log_prefix} {err}",
-              "green" if return_code == 0 else "red"))
-        if handle_error and return_code != 0:
-            sys.exit(1)
-        return return_code, out, err
-
-    def is_gh_repo_private(self, gh_user, gh_repo: str) -> bool:
-        r = requests.get(f"https://api.github.com/repos/{gh_user}/{gh_repo}")
-        return r.status_code == 404
 
 
 class ClusterConfiguration(BaseConfiguration):
@@ -373,7 +281,7 @@ class FluxConfiguration(BaseConfiguration):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Cluster configuration")
+    parser = argparse.ArgumentParser(description="Flux configuration")
     parser.add_argument("--kube-config", type=str,
                         help="Path to kubeconfig file")
     parser.add_argument(
